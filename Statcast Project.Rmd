@@ -1,0 +1,108 @@
+---
+title: "Statcast"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(modelr)
+library(xgboost)
+library(caret)
+library(baseballr)
+
+library(PCAmixdata)
+```
+
+# Motivation
+This project was motivated by an interest in the MLB's Statcast, a technology installed in MLB stadiums in 2015 that allows for the collection and analysis of a massive amount of data including pitch, hit and player tracking.
+
+In particular, when searching for available MiLB Statcast data, I came across Synthetic Statcast, a product created by Baseball Info Solutions that estimates exit velocity, launch angle, and spray angle from the hit location and timing of batted balls. In general, exit velocity, launch angle, and spray angle require more precise tracking data and thus aren't as readily available, whereas hit location and hang time are simpler to measure by hand. 
+
+In this project, the goal is to create something similar to BIS's proprietary model - a model that can estimate Statcast batted ball data based on manually tracked data.     
+
+# Get Statcast data
+```{r data, results="hide"}
+
+smallData <- scrape_statcast_savant(start_date = as.Date("2019-10-01"), end_date = as.Date("2019-10-03")) %>% 
+     # in play
+     filter(type == "X") %>%
+  
+     # select: batted ball type, hit coordinates, hit distance, exit velocity, launch angle   
+     select(24, 38, 39, 53:55) %>%
+     mutate(X = hc_x - 125.42, Y = 198.27 - hc_y) %>%
+  
+     #impute missing hit distance data (maybe make more precise)
+     mutate(hit_distance_sc = coalesce(hit_distance_sc, sqrt(X^2+Y^2)))
+
+fullData <- scrape_statcast_savant(start_date = as.Date("2019-10-01"), end_date = as.Date("2019-10-03")) %>%
+  filter(type == "X") %>%
+  mutate(X = hc_x - 125.42, Y = 198.27 - hc_y) %>%
+  mutate(hit_distance_sc = coalesce(hit_distance_sc, sqrt(X^2+Y^2))) %>% 
+  select(1:10, 15, 17:31, 38, 39, 45:59, 79, 88:91)
+```
+
+```{r eda}
+home <- tibble(X = 0, Y = 0)
+
+# exit velocity and launch angle by hit location
+smallData %>% ggplot(mapping = aes(x = X, y = Y)) + 
+              geom_point(aes(color = launch_speed), size = 2) + 
+              geom_point(data = home, color = "red", size = 5)
+smallData %>% ggplot(mapping = aes(x = X, y = Y)) + 
+              geom_point(aes(color = launch_angle), size = 2) + 
+              geom_point(data = home, color = "red", size = 5)
+
+# distribution of exit velocity and launch angle
+smallData %>% ggplot(aes(x = launch_speed)) + 
+              geom_histogram(binwidth = 5)
+smallData %>% ggplot(aes(x = launch_angle)) + 
+              geom_histogram(binwidth = 5)
+```
+
+# Modeling
+```{r linear}
+linModelEV <- lm(launch_speed ~ bb_type * hc_x * hc_y, data = smallData) 
+smallData <- smallData %>% add_predictions(linModelEV) %>% add_residuals(linModelEV) 
+smallData %>% ggplot(mapping = aes(x = launch_speed, y = pred)) +
+              geom_point(aes(color = resid))
+rsquare(linModelEV, smallData)
+```
+
+```{r pca}
+# PCA to find variables most closely correlated to exit velocity
+# using PCAmixdata package
+
+# gamr type, year, in play
+fullDataNoYear <- fullData[, c(-12, -17, -22)]
+split <- splitmix(na.omit(fullDataNoYear[,2:45]))
+X1 <- split$X.quanti
+X2 <- split$X.quali
+
+pcaRes <- PCAmix(X.quanti = X1, X.quali = X2, rename.level = TRUE, graph = FALSE)
+
+?plot.PCAmix
+par(mfrow=c(2,2))
+plot(pcaRes,choice="ind",coloring.ind=X2$houses,label=FALSE,
+      posleg="bottomright", main="Observations")
+#plot(pcaRes,choice="levels",xlim=c(-1.5,2.5), main="Levels")
+plot(pcaRes,choice="cor",main="Numerical variables")
+plot(pcaRes,choice="sqload",coloring.var=T, leg=TRUE,
+     posleg="topright", main="All variables")
+```
+
+```{r logistic}
+
+```
+```{r gam}
+
+```
+```{r xgboost}
+
+```
+
+
+
